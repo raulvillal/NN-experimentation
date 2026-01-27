@@ -5,23 +5,19 @@ from nnfs.datasets import sine_data
 import matplotlib.pyplot as plt
 
 nnfs.init()
-"""Example input data
-X = [[1, 2, 3, 2.5],
-    [2.0, 5.0, -1.0, 2.0],
-    [-1.5, 2.7, 3.3, -0.8]]
-"""
+
 
 
 class Layer_Dense:
     def __init__(self, n_inputs, n_neurons, weight_regularizer_l1=0., weight_regularizer_l2=0, bias_regularizer_l1=0, bias_regularizer_l2=0):
-        self.weights = 0.10*np.random.randn(n_inputs, n_neurons)
+        self.weights = 0.01*np.random.randn(n_inputs, n_neurons)
         self.biases = np.zeros((1, n_neurons))
         self.weight_regularizer_l1 = weight_regularizer_l1
         self.weight_regularizer_l2 = weight_regularizer_l2
         self.bias_regularizer_l1 = bias_regularizer_l1
         self.bias_regularizer_l2 = bias_regularizer_l2
 
-    def forward(self, inputs):
+    def forward(self, inputs, training):
         self.inputs = inputs
         self.output = np.dot(inputs, self.weights) + self.biases
 
@@ -45,8 +41,13 @@ class Layer_Dropout:
     def __init__(self, rate):
         self.rate = 1 - rate
 
-    def forwards(self, inputs):
+    def forward(self, inputs, training):
         self.inputs = inputs
+
+        #Si no está en modo entrenamiento, no se aplica dropout outputs=inputs
+        if not training:
+            self.output = inputs.copy()
+            return
         #Creación de la máscara de 0 y 1
         self.binary_mask = np.random.binomial(1, self.rate, size=inputs.shape)/self.rate
         #Se aplica la máscara a los outputs
@@ -57,7 +58,7 @@ class Layer_Dropout:
         self.dinputs = dvalues*self.binary_mask
 
 class Activation_ReLU:
-    def forward(self, inputs):
+    def forward(self, inputs, training):
         self.inputs = inputs
         self.output = np.maximum(0, inputs)
 
@@ -69,7 +70,7 @@ class Activation_ReLU:
         return outputs
 
 class Activation_Softmax:
-    def forward(self, inputs):
+    def forward(self, inputs, training):
         self.inputs = inputs
         exp_values = np.exp(inputs - np.max(inputs, axis=1, keepdims=True))
         probabilities = exp_values / np.sum(exp_values, axis=1, keepdims=True)
@@ -86,7 +87,7 @@ class Activation_Softmax:
         return np.argmax(outputs, axis=1)
 
 class Layer_Input:
-    def forward(self, inputs):
+    def forward(self, inputs, training):
         self.output = inputs
 
 class Optimizer_SGD:
@@ -271,16 +272,9 @@ class Loss_CategorialCrossentropy(Loss):
         self.dinputs = self.dinputs / samples
 
 class Activation_Softmax_Loss_CategoricalCrossentropy():
-    def __init__(self):
-        self.activation = Activation_Softmax()
-        self.loss = Loss_CategorialCrossentropy()
-
-    def forward(self, inputs, y_true):
-        self.activation.forward(inputs)
-        self.output = self.activation.output
-        return self.loss.calculate(self.output, y_true)
 
     def backward(self, dvalues, y_true):
+
         samples = len(dvalues)
 
         if len(y_true.shape) == 2:
@@ -406,19 +400,29 @@ class Accuracy_Categorical(Accuracy):
 class Model:
 
     def __init__(self):
+
         self.layers = []
+
+        self.softmax_classifier_output = None
         
     def add(self, layer):
+
         self.layers.append(layer)
 
     def set(self, *, loss, optimizer, accuracy):
+
         self.loss = loss
+
         self.optimizer = optimizer
+
         self.accuracy = accuracy
 
     def finalize(self):
+
         self.input_layer = Layer_Input()
+
         layer_count = len(self.layers)
+
         self.trainable_layers = []
 
         for i in range(layer_count):
@@ -440,7 +444,23 @@ class Model:
 
         self.loss.remember_trainable_layers(self.trainable_layers)
 
+        if isinstance(self.layers[-1], Activation_Softmax) and \
+           isinstance(self.loss, Loss_CategorialCrossentropy): 
+            
+            self.softmax_classifier_output = Activation_Softmax_Loss_CategoricalCrossentropy()
+
     def backward(self, output, y):
+
+        if self.softmax_classifier_output is not None:
+
+            self.softmax_classifier_output.backward(output, y)
+
+            self.layers[-1].dinputs = self.softmax_classifier_output.dinputs
+
+            for layer in reversed(self.layers[:-1]):
+                layer.backward(layer.next.dinputs)
+        
+            return
 
         self.loss.backward(output, y)
 
@@ -453,7 +473,7 @@ class Model:
 
         for epoch in range(1, epochs+1):
 
-            output = self.forward(X)
+            output = self.forward(X, training=True)
 
             data_loss, regularization_loss = self.loss.calculate(output, y, include_regularization=True)
             loss = data_loss + regularization_loss
@@ -478,8 +498,11 @@ class Model:
                       f'lr: {self.optimizer.current_learning_rate}')
                 
         if validation_data is not None:
+
             X_val, y_val = validation_data
-            output = self.forward(X_val)
+
+            output = self.forward(X_val, training=False)
+
             loss = self.loss.calculate(output, y_val)
 
             predictions = self.output_layer_activation.predictions(output)
@@ -489,31 +512,28 @@ class Model:
             print(f'validation_acc: {accuracy:.3f}, ' +
                   f'validation_loss: {loss:.3f}')
 
-    def forward(self, X):
+    def forward(self, X, training):
 
-        self.input_layer.forward(X)
+        self.input_layer.forward(X, training)
 
         for layer in self.layers:
-            layer.forward(layer.prev.output)
+            layer.forward(layer.prev.output, training)
 
         return layer.output
 
 
-X, y = spiral_data(samples=100, classes=2)
-X_test, y_test = spiral_data(samples=100, classes=2)
-
-y = y.reshape(-1, 1)
-y_test = y_test.reshape(-1, 1)
+X, y = spiral_data(samples=1000, classes=3)
+X_test, y_test = spiral_data(samples=100, classes=3)
 
 model = Model()
 
-model.add(Layer_Dense(2, 64, weight_regularizer_l2=5e-4, bias_regularizer_l2=5e-4))
+model.add(Layer_Dense(2, 512, weight_regularizer_l2=5e-4, bias_regularizer_l2=5e-4))
 model.add(Activation_ReLU())
-model.add(Layer_Dense(64,1))
-model.add(Activation_Sigmoid())
+model.add(Layer_Dense(512,3))
+model.add(Activation_Softmax())
 model.set(
-    loss = Loss_BinaryCrossentropy(),
-    optimizer = Optimizer_Adam(decay=5e-7),
+    loss = Loss_CategorialCrossentropy(),
+    optimizer = Optimizer_Adam(learning_rate=0.05, decay=5e-5),
     accuracy = Accuracy_Categorical()
 )
 
