@@ -36,6 +36,13 @@ class Layer_Dense:
 
         self.dinputs = np.dot(dvalues, self.weights.T)
 
+    def get_parameters(self):
+        return self.weights, self.biases
+
+    def set_parameters(self, weights, biases):
+        self.weights = weights
+        self.biases = biases
+
 class Layer_Dropout:
 
     def __init__(self, rate):
@@ -464,12 +471,15 @@ class Model:
         self.layers.append(layer)
 
     def set(self, *, loss, optimizer, accuracy):
+        if loss is not None:
 
-        self.loss = loss
+            self.loss = loss
 
-        self.optimizer = optimizer
+        if optimizer is not None:
+            self.optimizer = optimizer
 
-        self.accuracy = accuracy
+        if accuracy is not None:
+            self.accuracy = accuracy
 
     def finalize(self):
 
@@ -496,7 +506,8 @@ class Model:
             if hasattr(self.layers[i], 'weights'):
                 self.trainable_layers.append(self.layers[i])
 
-        self.loss.remember_trainable_layers(self.trainable_layers)
+        if self.loss is not None:
+            self.loss.remember_trainable_layers(self.trainable_layers)
 
         if isinstance(self.layers[-1], Activation_Softmax) and \
            isinstance(self.loss, Loss_CategorialCrossentropy): 
@@ -648,6 +659,23 @@ class Model:
         print(f'validation, ' +
               f'acc: {validation_accuracy:.3f} ' +
               f'loss: {validation_loss:.3f}')
+        
+    def get_parameters(self):
+
+        parameters = []
+
+        for layer in self.trainable_layers:
+            parameters.append(layer.get_parameters())
+
+        return parameters
+    
+    def set_parameters(self, parameters):
+
+        for parameter_set, layer in zip(parameters, self.trainable_layers):
+
+            layer.set_parameters(*parameter_set)
+
+
 
 
 
@@ -759,6 +787,9 @@ model.set(loss=Loss_CategorialCrossentropy(),
           optimizer=Optimizer_Adam(decay=1e-3),
           accuracy=Accuracy_Categorical())
 model.finalize()
-model.train(X, y, validation_data=(X_test, y_test), epochs=10, batch_size=128, print_every=100)
+model.train(X, y, validation_data=(X_test, y_test), epochs=2, batch_size=128, print_every=100)
 
 model.evaluate(X_test, y_test)
+
+parameters = model.get_parameters()
+print(parameters)
