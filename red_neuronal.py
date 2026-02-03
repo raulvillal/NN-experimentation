@@ -3,6 +3,8 @@ import nnfs
 from nnfs.datasets import spiral_data
 from nnfs.datasets import sine_data
 import matplotlib.pyplot as plt
+import copy
+import pickle
 
 nnfs.init()
 
@@ -470,7 +472,7 @@ class Model:
 
         self.layers.append(layer)
 
-    def set(self, *, loss, optimizer, accuracy):
+    def set(self, *, loss=None, optimizer=None, accuracy=None):
         if loss is not None:
 
             self.loss = loss
@@ -675,38 +677,66 @@ class Model:
 
             layer.set_parameters(*parameter_set)
 
+    def save_parameters(self, path):
 
+        with open(path, 'wb') as f:
+            pickle.dump(self.get_parameters(), f)
 
+    def load_parameters(self, path):
 
+        with open(path, 'rb') as f:
+            self.set_parameters(pickle.load(f))
 
+    def save(self, path):
 
+        model = copy.deepcopy(self)
 
+        model.loss.new_pass()
+        model.accuracy.new_pass()
 
+        model.input_layer.__dict__.pop('output', None)
+        model.loss.__dict__.pop('dinputs', None)
 
+        for layer in model.layers:
+            for property in ['inputs', 'output', 'dinputs', 'dweights', 'dbiases']:
+                layer.__dict__.pop(property, None)
 
-'''
-X, y = spiral_data(samples=1000, classes=3)
-X_test, y_test = spiral_data(samples=100, classes=3)
+        with open(path, 'wb') as f:
+            pickle.dump(model, f)
 
-model = Model()
+    def predict(self, X, *, batch_size=None):
 
-model.add(Layer_Dense(2, 512, weight_regularizer_l2=5e-4, bias_regularizer_l2=5e-4))
-model.add(Activation_ReLU())
-model.add(Layer_Dropout(0.1))
-model.add(Layer_Dense(512,3))
-model.add(Activation_Softmax())
-model.set(
-    loss = Loss_CategorialCrossentropy(),
-    optimizer = Optimizer_Adam(learning_rate=0.05, decay=5e-5),
-    accuracy = Accuracy_Categorical()
-)
+        prediction_steps = 1
 
-model.finalize()
+        if batch_size is not None:
+            prediction_steps = len(X) // batch_size
 
-model.train(X, y, validation_data=(X_test, y_test), epochs=10000, print_every=100)
-'''
+            if prediction_steps*batch_size < len(X):
+                prediction_steps += 1
 
+        output = []
 
+        for step in range(prediction_steps):
+
+            if batch_size is None:
+                batch_X = X
+            else:
+                batch_X = X[step*batch_size:(step+1)*batch_size]
+
+            batch_output = self.forward(batch_X, training=False)
+
+            output.append(batch_output)
+
+        return np.vstack(output)
+
+    @staticmethod
+    def load(path):
+
+        with open(path, 'rb') as f:
+            model = pickle.load(f)
+
+        return model
+        
 from zipfile import ZipFile
 import os
 import urllib
@@ -718,7 +748,9 @@ URL = 'https://nnfs.io/datasets/fashion_mnist_images.zip'
 FILE = 'fashion_mnist_images.zip'
 
 FOLDER = 'fashion_mnist_images'
-'''
+
+#Descarga de data set MNIST
+''' 
 if not os.path.isfile(FILE):
     print(f'Donwloading {URL} and saving as {FILE}...')
     urllib.request.urlretrieve(URL, FILE)
@@ -759,6 +791,20 @@ def create_data_mnist(path):
     return X, y, X_test, y_test
 
 
+fashion_mnist_labels = {
+    0: 'T-shirt/top',
+    1: 'Trouser',
+    2: 'Pullover',
+    3: 'Dress',
+    4: 'Coat',
+    5: 'Sandal',
+    6: 'Shirt',
+    7: 'Sneaker',
+    8: 'Bag',
+    9: 'Ankle boot'
+}
+
+
 X, y, X_test, y_test = create_data_mnist(FOLDER)
 
 X = (X.astype(np.float32) - 127.5) / 127.5
@@ -775,21 +821,41 @@ np.random.shuffle(keys)
 X = X[keys]
 y = y[keys]
 
-model = Model()
+model = Model.load('fashion_mnist_model.model')
 
+#Definición de la arquitectura de la red neuronal
+'''
 model.add(Layer_Dense(X.shape[1], 128))
 model.add(Activation_ReLU())
 model.add(Layer_Dense(128, 128))
 model.add(Activation_ReLU())
 model.add(Layer_Dense(128, 10))
 model.add(Activation_Softmax())
-model.set(loss=Loss_CategorialCrossentropy(),
-          optimizer=Optimizer_Adam(decay=1e-3),
-          accuracy=Accuracy_Categorical())
+model.set(
+    loss=Loss_CategorialCrossentropy(),
+    optimizer=Optimizer_Adam(decay=1e-5),
+    accuracy=Accuracy_Categorical()
+)
+
 model.finalize()
-model.train(X, y, validation_data=(X_test, y_test), epochs=2, batch_size=128, print_every=100)
+
+model.train(X, y, validation_data=(X_test, y_test), epochs=10, batch_size=128, print_every=100)
+'''
 
 model.evaluate(X_test, y_test)
 
-parameters = model.get_parameters()
-print(parameters)
+image_data = cv2.imread('dress.jpg', cv2.IMREAD_GRAYSCALE)
+
+image_data = cv2.resize(image_data, (28, 28))
+
+image_data = 255 - image_data
+
+image_data = (image_data.reshape(1, -1).astype(np.float32) - 127.5) / 127.5
+
+confidences = model.predict(image_data)
+
+predictions = model.output_layer_activation.predictions(confidences)
+
+prediction = fashion_mnist_labels[predictions[0]]
+
+print(prediction)
